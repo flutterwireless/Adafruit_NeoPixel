@@ -31,11 +31,21 @@
   <http://www.gnu.org/licenses/>.
   -------------------------------------------------------------------------*/
 
-#include "Adafruit_NeoPixel.h"
+#include "Flutter_NeoPixel.h"
 
-Adafruit_NeoPixel::Adafruit_NeoPixel(uint16_t n, uint8_t p, uint8_t t) :
-   numLEDs(n), numBytes(n * 3), pin(p), brightness(0),
-   pixels(NULL), type(t), endTime(0)
+
+volatile uint8_t        *p, *end, pix, mask;
+volatile int             pinMask, time0, time1, period, t;
+volatile Pio            *port;
+volatile WoReg *portSet, *portClear, *timeValue, *timeReset;
+
+volatile boolean firstInt = false;
+
+#define BITPERIOD 60
+
+
+Adafruit_NeoPixel::Adafruit_NeoPixel(uint16_t n, uint8_t p, uint8_t t) : numLEDs(n), numBytes(n * 3), pin(p), pixels(NULL)
+  ,type(t), brightness(0), endTime(0)
 #ifdef __AVR__
   ,port(portOutputRegister(digitalPinToPort(p))),
    pinMask(digitalPinToBitMask(p))
@@ -57,7 +67,7 @@ Adafruit_NeoPixel::Adafruit_NeoPixel(uint16_t n, uint8_t p, uint8_t t) :
     gOffset = 1;
     bOffset = 2;
   }
-  
+
 }
 
 Adafruit_NeoPixel::~Adafruit_NeoPixel() {
@@ -95,7 +105,7 @@ void Adafruit_NeoPixel::show(void) {
   // state, computes 'pin high' and 'pin low' values, and writes these back
   // to the PORT register as needed.
 
-  noInterrupts(); // Need 100% focus on instruction timing
+  //noInterrupts(); // Need 100% focus on instruction timing
 
 #ifdef __AVR__
 
@@ -836,28 +846,70 @@ void Adafruit_NeoPixel::show(void) {
   #define TIME_400_1 ((int)(1.20 * SCALE + 0.5) - (5 * INST))
   #define PERIOD_400 ((int)(2.50 * SCALE + 0.5) - (5 * INST))
 
-  int             pinMask, time0, time1, period, t;
-  Pio            *port;
-  volatile WoReg *portSet, *portClear, *timeValue, *timeReset;
-  uint8_t        *p, *end, pix, mask;
+ // int             pinMask, time0, time1, period, t;
+  //Pio            *port;
+  //volatile WoReg *portSet, *portClear, *timeValue, *timeReset;
+  //uint8_t        *p, *end, pix, mask;
 
   pmc_set_writeprotect(false);
-  pmc_enable_periph_clk((uint32_t)TC3_IRQn);
-  TC_Configure(TC1, 0,
-    TC_CMR_WAVE | TC_CMR_WAVSEL_UP | TC_CMR_TCCLKS_TIMER_CLOCK1);
-  TC_Start(TC1, 0);
+  //pmc_switch_mck_to_sclk(0);
+  pmc_enable_periph_clk((uint32_t)TC0_IRQn);
+
+   NVIC_EnableIRQ(TC0_IRQn); // enable TC0 interrupts
+
+  TC_Configure(TC0, 0, TC_CMR_WAVE | TC_CMR_WAVSEL_UP_RC | TC_CMR_TCCLKS_TIMER_CLOCK1 | TC_CMR_BCPB_CLEAR | TC_CMR_BCPC_CLEAR | TC_CMR_ACPA_CLEAR | TC_CMR_ACPC_CLEAR | TC_CMR_CPCSTOP);
+
+   TC0->TC_CHANNEL[0].TC_IER = TC_IER_CPCS ;
+
+
+
+ //   TC_SetRA(TC0,0,0);
+  //  TC_SetRB(TC0,0,10);
+  //  TC_SetRC(TC0,0,30);
+
+  // TC0->TC_CHANNEL[0].TC_RC = 30;
+
+    PIO_Configure(
+    g_APinDescription[8].pPort,
+    g_APinDescription[8].ulPinType,
+    g_APinDescription[8].ulPin,
+    g_APinDescription[8].ulPinConfiguration);
+/*
+     PIO_Configure(
+    g_APinDescription[8].pPort,
+    g_APinDescription[8].ulPinType,
+    g_APinDescription[8].ulPin,
+    g_APinDescription[8].ulPinConfiguration);
+    */
+
+    PIO_Configure(
+    PIOA,
+    PIO_PERIPH_B,
+    PIO_PA0,
+    PIO_DEFAULT);
+
+    TC_SetRA(TC0,0,1);
+    TC_SetRC(TC0,0,BITPERIOD);
+
+    firstInt = true;
+/*
 
   pinMask   = g_APinDescription[pin].ulPin; // Don't 'optimize' these into
   port      = g_APinDescription[pin].pPort; // declarations above.  Want to
   portSet   = &(port->PIO_SODR);            // burn a few cycles after
   portClear = &(port->PIO_CODR);            // starting timer to minimize
-  timeValue = &(TC1->TC_CHANNEL[0].TC_CV);  // the initial 'while'.
-  timeReset = &(TC1->TC_CHANNEL[0].TC_CCR);
+  timeValue = &(TC0->TC_CHANNEL[0].TC_CV);  // the initial 'while'.
+  timeReset = &(TC0->TC_CHANNEL[0].TC_CCR);
+  */
+
   p         =  pixels;
   end       =  p + numBytes;
   pix       = *p++;
   mask      = 0x80;
 
+    TC_Start(TC0, 0);
+
+/*
 #ifdef NEO_KHZ400
   if((type & NEO_SPDMASK) == NEO_KHZ800) { // 800 KHz bitstream
 #endif
@@ -872,21 +924,46 @@ void Adafruit_NeoPixel::show(void) {
   }
 #endif
 
+
   for(t = time0;; t = time0) {
-    if(pix & mask) t = time1;
-    while(*timeValue < period);
-    *portSet   = pinMask;
-    *timeReset = TC_CCR_CLKEN | TC_CCR_SWTRG;
-    while(*timeValue < t);
-    *portClear = pinMask;
-    if(!(mask >>= 1)) {   // This 'inside-out' loop logic utilizes
-      if(p >= end) break; // idle time to minimize inter-byte delays.
-      pix = *p++;
-      mask = 0x80;
-    }
-  }
+
+
+
+
+        if(pix & mask)
+          {
+            t = time1;
+          }
+
+        while(*timeValue < period)
+          {};
+
+          *portSet   = pinMask;
+          *timeReset = TC_CCR_CLKEN | TC_CCR_SWTRG;
+
+        while(*timeValue < t)
+          {};
+
+           *portClear = pinMask;
+
+          if( !(mask >>= 1) )
+            {
+                                  // This 'inside-out' loop logic utilizes
+              if(p >= end) break; // idle time to minimize inter-byte delays.
+
+              pix = *p++;
+              mask = 0x80;
+
+            }
+
+
+
+
+      }
+
   while(*timeValue < period); // Wait for last bit
-  TC_Stop(TC1, 0);
+  TC_Stop(TC0, 0);
+  */
 
 #endif // end Arduino Due
 
@@ -895,6 +972,92 @@ void Adafruit_NeoPixel::show(void) {
   interrupts();
   endTime = micros(); // Save EOD time for latch on next call
 }
+
+
+void sendZero()
+{
+  TC_SetRA(TC0,0,BITPERIOD-10);
+}
+
+void sendOne()
+{
+  TC_SetRA(TC0,0,BITPERIOD-25);
+  //TC_SetRA(TC0,0,100-55); //55 for testing only
+}
+
+void resetLatch()
+{
+  TC_SetRA(TC0,0,0);
+  TC_SetRC(TC0,0,BITPERIOD);
+}
+
+
+
+void TC0_Handler()
+{
+    long dummy=REG_TC0_SR0; // read this to clear the interrupt so each one fires only once
+    interrupts();
+
+
+    if(p<end)
+    {
+      if(firstInt == true)
+      {
+        TC_SetRC(TC0,0,BITPERIOD);
+        firstInt = false;
+        TC0->TC_CHANNEL[0].TC_CMR = TC_CMR_WAVE | TC_CMR_WAVSEL_UP_RC | TC_CMR_TCCLKS_TIMER_CLOCK1 | TC_CMR_BCPB_SET | TC_CMR_BCPC_CLEAR | TC_CMR_ACPA_SET | TC_CMR_ACPC_CLEAR | TC_CMR_CPCSTOP;
+        TC_Start(TC0, 0);
+      }
+
+      if(pix & mask)
+      {
+        sendOne();
+      }else
+      {
+        sendZero();
+      }
+
+      mask = mask>>1;
+
+     if( mask==0 )
+     {
+         pix = *p++;
+         mask = 0x80;
+
+     }
+
+   }else
+   {
+        if(p == end)
+        {
+          p++;
+        TC0->TC_CHANNEL[0].TC_CMR = TC_CMR_WAVE | TC_CMR_WAVSEL_UP_RC | TC_CMR_TCCLKS_TIMER_CLOCK1 | TC_CMR_BCPB_SET | TC_CMR_BCPC_CLEAR | TC_CMR_ACPA_CLEAR | TC_CMR_ACPC_CLEAR | TC_CMR_CPCSTOP;
+        TC_Start(TC0, 0);
+
+        }else
+       {
+            NVIC_DisableIRQ(TC0_IRQn); // enable TC0 interrupts
+            //TC_Stop(TC0, 0);
+            pmc_disable_periph_clk((uint32_t)TC0_IRQn);
+            return;
+       }
+
+   }
+
+
+
+
+TC_Start(TC0, 0);
+return;
+
+}
+
+
+
+
+
+
+
 
 // Set the output pin number
 void Adafruit_NeoPixel::setPin(uint8_t p) {
